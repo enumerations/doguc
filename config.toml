@@ -1,94 +1,82 @@
 # =============================================================================
-# Discord Username Checker — configuration
-# Toutes les valeurs réglables vivent ici. Relancer le script pour les appliquer.
+# doguc — configuration
 # =============================================================================
 
-# Fichier chargé au démarrage. Chemins relatifs = dossier du script.
-# Surcharge possible : CHECKER_CONFIG=/chemin/config.toml
-
 [gateway]
-# true  = endpoint ProxyScrape user:pass@host:port (recommandé)
-# false = liste statique dans files.proxies
+# true  = user:pass@host:port endpoint (recommended)
+# false = static list from file (proxies.txt)
 enabled = true
-host = "gw.dataimpulse.com"
-port = 823
-user = "3a6897e697590194cd5d"
-password = "b7d70dd54cc7c2ce"
+host = "proxy.example.com"
+port = 8080
+user = "YOUR_USER"
+password = "YOUR_PASSWORD"
 
-# rotating = même IP jusqu'au 429, puis nouvelle session (défaut)
-# sticky   = même IP pendant session_lifetime_minutes (même logique 429)
-mode = "rotating"
-# auto | dataimpulse | proxyscrape
-provider = "auto"
-# false = réutiliser l'IP (sessid + keep-alive) jusqu'au 429, puis rotate.
-# true  = nouvelle IP à CHAQUE requête (plus de 429, moins de RPS).
+# false = reuse the IP (sessid + keep-alive) until a 429, then rotate.
+# true  = new IP on EVERY request (fewer 429s, lower RPS).
 unique_session_per_request = false
 
-# Nombre d'IPs tenues en parallèle. Chaque slot = 1 sessid, réutilisé jusqu'au 429.
-# Mettre ≈ max_concurrent (1 requête in-flight par IP).
+# How many IPs to hold in parallel. Each slot is one sessid, reused until a 429.
+# Set this ≈ max_concurrent (1 in-flight request per IP).
 sessions = 400
-# ProxyScrape sticky (ignoré sur DataImpulse, qui utilise login__sessid.{id}).
+# Session username ({user}, {session}, {lifetime}).
 username_template = "{user}-session-{session}-lifetime-{lifetime}"
-session_lifetime_minutes = 10
 
 [files]
-usernames = "og_usernames_french_filtered.txt"
+usernames = "data/usernames.txt"
 proxies = "proxies.txt"
-# Hits persistés : relancer le checker reprend sans rechecker ces noms.
+# Persisted hits: rerunning the checker skips names already in these files.
 available = "available.txt"
 taken = "taken.txt"
-# Usernames abandonnés après max_retries (réessayés au prochain run).
+# Usernames abandoned after max_retries (retried on the next run).
 errors = "errors.txt"
 
 [debug]
-# true = une ligne par requête (username + IP de sortie). Ralentit fortement le RPS.
+# true = one line per request (username + exit IP). Cuts RPS hard.
 enabled = false
-# Résout l'IP publique via ipify à travers le même proxy. false = username seulement.
+# Resolve the public IP via ipify through the same proxy. false = username only.
 show_exit_ip = true
 
 [performance]
-# Requêtes HTTP simultanées (semaphore + limite du connecteur TCP).
-# 200–400 = départ prudent ; 800+ si les erreurs réseau restent basses.
+# Concurrent HTTP requests (semaphore + TCP connector limit).
+# 200–400 is a cautious start; 800+ if network errors stay low.
 max_concurrent = 400
-# Consommateurs de file. Un peu au-dessus de max_concurrent pour absorber les retries.
+# Queue consumers. A bit above max_concurrent to absorb retries.
 workers = 450
-# Petit délai après acquisition d'un slot. Laisser 0 en rotating.
+# Small delay after acquiring a slot. Leave at 0 in rotating mode.
 base_delay = 0.0
-# Timeouts aiohttp (secondes). Courts = workers libérés vite sur un proxy mort.
+# aiohttp timeouts (seconds). Short values free workers quickly on a dead proxy.
 request_timeout = 5
 connect_timeout = 4
-# Keep-alive du pool TCP (secondes). On réutilise le tunnel tant qu'il n'y a pas de 429.
+# TCP pool keep-alive (seconds). The tunnel is reused until a 429.
 keepalive_timeout = 30
-# true = nouveau TCP à chaque requête (casse la réutilisation d'IP — laisser false).
+# true = new TCP connection on every request (breaks IP reuse — leave false).
 force_close = false
-# Rafraîchissement de l'UI Rich (Hz).
+# Rich UI refresh rate (Hz).
 ui_refresh_hz = 4
-# Tentatives par username (429 / réseau) avant écriture dans errors.txt.
+# Attempts per username (429 / network) before writing to errors.txt.
 max_retries = 5
-# Backoff + jitter (secondes) sur erreurs RÉSEAU uniquement. Un 429 retry immédiat.
+# Backoff + jitter (seconds) on NETWORK errors only. A 429 retries immediately.
 retry_backoff_base = 0.05
 retry_backoff_cap = 1.5
-# Flush disque tous les N hits (pas de fsync à chaque ligne — trop lent à haut RPS).
+# Flush to disk every N hits (no fsync per line — too slow at high RPS).
 flush_every = 50
 
 [rate_limit]
-# Jamais de limite Discord hardcodée. remaining vient des headers.
-# sticky/list : si remaining <= threshold → on jette cette IP, sans sleep global.
+# No hardcoded Discord limit. remaining comes from response headers.
+# list: if remaining <= threshold → drop that IP, no global sleep.
 low_remaining_threshold = 0
-# Inutilisé en rotation IP (conservé pour compat).
-slowdown_factor = 1.5
-# sticky/list : trop de 429 consécutifs → cooldown extra sur CE proxy, pas sur les autres.
+# list: too many consecutive 429s → extra cooldown on THIS proxy only.
 max_429_before_cooldown = 3
-# sticky/list : N échecs réseau d'affilée → proxy marqué mort temporairement.
+# list: N consecutive network failures → proxy marked dead temporarily.
 dead_after_failures = 8
 dead_cooldown_seconds = 30
-# sticky/list : max requêtes in-flight par IP (1 = une req à la fois par session).
+# list: max in-flight requests per IP (1 = one request at a time per session).
 max_inflight_per_ip = 1
-# Retry-After au-delà de ce seuil (secondes) = IP/CF brûlé. On rotate, on n'attend PAS.
+# Retry-After above this threshold (seconds) = IP/CF burned. Rotate, do NOT wait.
 huge_retry_after = 30
 
 [cloudflare]
-# 10 000 invalid requests / 10 minutes / IP.
-# Comptés : 401, 403, et 429 sauf scope "shared".
+# 10,000 invalid requests / 10 minutes / IP.
+# Counted: 401, 403, and 429 except scope "shared".
 window_seconds = 600
 limit = 9500

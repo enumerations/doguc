@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-Discord unique-username availability checker.
-
-POST https://discord.com/api/v9/unique-username/username-attempt-unauthed
-Body: {"username": "..."}  — tokenless.
-
-ProxyScrape Regular Residential (rp.scrapegw.com):
-  rotating (défaut) — username nu → nouvelle IP à chaque requête
-  sticky            — user-session-{id}-lifetime-{minutes} → IP tenue N minutes
-
-Un 429 ne bloque jamais le checker entier : on change d'IP / de tunnel et on
-retry ce username. Resume : available.txt + taken.txt (errors.txt = log de run).
-"""
 
 from __future__ import annotations
 
@@ -37,25 +24,17 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-# =============================================================================
-# Configuration (loaded from config.toml)
-# =============================================================================
-
 CONFIG_FILE = "config.toml"
-
 
 @dataclass(frozen=True)
 class Config:
     use_gateway: bool
-    gateway_mode: str
     gateway_host: str
     gateway_port: int
     gateway_user: str
     gateway_pass: str
     gateway_username_template: str
-    gateway_session_lifetime: int
     gateway_sessions: int
-    gateway_provider: str
     unique_session_per_request: bool
     proxies_file: str
     usernames_file: str
@@ -66,7 +45,6 @@ class Config:
     workers: int
     base_delay: float
     low_remaining_threshold: int
-    proactive_slowdown_factor: float
     max_429_before_cooldown: int
     dead_after_failures: int
     dead_cooldown_seconds: float
@@ -86,23 +64,21 @@ class Config:
     debug: bool
     debug_show_ip: bool
 
-
 def _resolve_path(base_dir: str, path: str) -> str:
     if os.path.isabs(path):
         return path
     return os.path.normpath(os.path.join(base_dir, path))
 
-
 def _config_path() -> str:
-    env = os.environ.get("CHECKER_CONFIG")
-    if env:
-        return os.path.abspath(env)
     here = os.path.dirname(os.path.abspath(__file__))
     beside_script = os.path.join(here, CONFIG_FILE)
     if os.path.isfile(beside_script):
         return beside_script
     return os.path.abspath(CONFIG_FILE)
 
+def _read_toml(path: str) -> dict:
+    with open(path, "rb") as fh:
+        return tomllib.load(fh)
 
 def load_config(path: Optional[str] = None) -> Config:
     path = path or _config_path()
@@ -111,8 +87,7 @@ def load_config(path: Optional[str] = None) -> Config:
             f"Config file not found: {path}\n"
             f"Copy or create {CONFIG_FILE} next to checker.py."
         )
-    with open(path, "rb") as fh:
-        raw = tomllib.load(fh)
+    raw = _read_toml(path)
 
     base = os.path.dirname(os.path.abspath(path))
     gw = raw.get("gateway", {})
@@ -124,22 +99,45 @@ def load_config(path: Optional[str] = None) -> Config:
 
     try:
         max_concurrent = int(perf["max_concurrent"])
-        mode = str(gw.get("mode", "rotating")).strip().lower()
-        if mode not in ("rotating", "sticky"):
-            raise ValueError(f"gateway.mode must be 'rotating' or 'sticky', got {mode!r}")
+        use_gateway = bool(gw["enabled"])
+        gateway_host = str(gw.get("host") or "").strip()
+        port_raw = str(gw.get("port") or "").strip()
+        gateway_user = str(gw.get("user") or "").strip()
+        gateway_pass = str(gw.get("password") or "").strip()
+        if use_gateway:
+            placeholders = {
+                "proxy.example.com",
+                "YOUR_USER",
+                "YOUR_PASSWORD",
+                "YOUR_PROXY_USER",
+                "YOUR_PROXY_PASSWORD",
+            }
+            if (
+                not gateway_host
+                or not port_raw
+                or not gateway_user
+                or not gateway_pass
+                or gateway_host in placeholders
+                or gateway_user in placeholders
+                or gateway_pass in placeholders
+            ):
+                raise ValueError(
+                    f"Fill in {CONFIG_FILE} ([gateway] host, port, user, password)."
+                )
+        try:
+            gateway_port = int(port_raw) if port_raw else 0
+        except ValueError as exc:
+            raise ValueError(f"gateway.port must be an integer, got {port_raw!r}") from exc
         return Config(
-            use_gateway=bool(gw["enabled"]),
-            gateway_mode=mode,
-            gateway_host=str(gw["host"]),
-            gateway_port=int(gw["port"]),
-            gateway_user=str(gw["user"]),
-            gateway_pass=str(gw["password"]),
+            use_gateway=use_gateway,
+            gateway_host=gateway_host,
+            gateway_port=gateway_port,
+            gateway_user=gateway_user,
+            gateway_pass=gateway_pass,
             gateway_username_template=str(
                 gw.get("username_template", "{user}-session-{session}-lifetime-{lifetime}")
             ),
-            gateway_session_lifetime=int(gw.get("session_lifetime_minutes", 10)),
             gateway_sessions=max(1, int(gw.get("sessions", max_concurrent))),
-            gateway_provider=str(gw.get("provider", "auto")).strip().lower(),
             unique_session_per_request=bool(gw.get("unique_session_per_request", False)),
             proxies_file=_resolve_path(base, str(files["proxies"])),
             usernames_file=_resolve_path(base, str(files["usernames"])),
@@ -159,7 +157,6 @@ def load_config(path: Optional[str] = None) -> Config:
             retry_backoff_cap=float(perf.get("retry_backoff_cap", 1.5)),
             flush_every=max(1, int(perf.get("flush_every", 50))),
             low_remaining_threshold=int(rl["low_remaining_threshold"]),
-            proactive_slowdown_factor=float(rl.get("slowdown_factor", 1.5)),
             max_429_before_cooldown=int(rl.get("max_429_before_cooldown", 3)),
             dead_after_failures=int(rl.get("dead_after_failures", 8)),
             dead_cooldown_seconds=float(rl.get("dead_cooldown_seconds", 30.0)),
@@ -173,7 +170,6 @@ def load_config(path: Optional[str] = None) -> Config:
     except KeyError as exc:
         raise ValueError(f"Missing key in {path}: {exc}") from exc
 
-
 try:
     cfg = load_config()
 except (FileNotFoundError, ValueError, tomllib.TOMLDecodeError) as exc:
@@ -181,15 +177,12 @@ except (FileNotFoundError, ValueError, tomllib.TOMLDecodeError) as exc:
     raise SystemExit(1) from exc
 
 USE_GATEWAY = cfg.use_gateway
-GATEWAY_MODE = cfg.gateway_mode
 GATEWAY_HOST = cfg.gateway_host
 GATEWAY_PORT = cfg.gateway_port
 GATEWAY_USER = cfg.gateway_user
 GATEWAY_PASS = cfg.gateway_pass
 GATEWAY_USERNAME_TEMPLATE = cfg.gateway_username_template
-GATEWAY_SESSION_LIFETIME = cfg.gateway_session_lifetime
 GATEWAY_SESSIONS = cfg.gateway_sessions
-GATEWAY_PROVIDER = cfg.gateway_provider
 UNIQUE_SESSION_PER_REQUEST = cfg.unique_session_per_request
 PROXIES_FILE = cfg.proxies_file
 USERNAMES_FILE = cfg.usernames_file
@@ -200,7 +193,6 @@ MAX_CONCURRENT = cfg.max_concurrent
 WORKERS = cfg.workers
 BASE_DELAY = cfg.base_delay
 LOW_REMAINING_THRESHOLD = cfg.low_remaining_threshold
-PROACTIVE_SLOWDOWN_FACTOR = cfg.proactive_slowdown_factor
 MAX_429_BEFORE_COOLDOWN = cfg.max_429_before_cooldown
 DEAD_AFTER_FAILURES = cfg.dead_after_failures
 DEAD_COOLDOWN_SECONDS = cfg.dead_cooldown_seconds
@@ -220,15 +212,9 @@ UI_REFRESH_HZ = cfg.ui_refresh_hz
 DEBUG = cfg.debug
 DEBUG_SHOW_IP = cfg.debug_show_ip
 
-# =============================================================================
-# Constants
-# =============================================================================
-
 API_URL = "https://discord.com/api/v9/unique-username/username-attempt-unauthed"
-# Echo de l'IP de sortie à travers le proxy (debug seulement).
 IP_ECHO_URL = "https://api.ipify.org"
 
-# Discord unique usernames: lowercase alphanumeric + . _ ; 2–32 chars; no "..".
 USERNAME_RE = re.compile(r"^[a-z0-9._]{2,32}$")
 _EXIT_IP_RE = re.compile(r"^[0-9a-fA-F:.]+$")
 
@@ -252,14 +238,7 @@ REQUEST_HEADERS = {
 
 console = Console()
 
-
-# =============================================================================
-# Username validation
-# =============================================================================
-
-
 def is_valid_username(username: str) -> bool:
-    """Strict Discord unique-username rules. Invalid names are never sent to the API."""
     if not USERNAME_RE.fullmatch(username):
         return False
     if ".." in username:
@@ -268,30 +247,16 @@ def is_valid_username(username: str) -> bool:
         return False
     return True
 
-
 def normalize_username(raw: str) -> str:
     return raw.strip().lower()
 
-
 def jittered_backoff(attempt: int) -> float:
-    """Full jitter: uniform(0, min(cap, base * 2^attempt)). Used for network errors only."""
     if attempt <= 0:
         return 0.0
     ceiling = min(RETRY_BACKOFF_CAP, RETRY_BACKOFF_BASE * (2 ** attempt))
     return random.uniform(0.0, ceiling)
 
-
-# =============================================================================
-# Rate-limit + Cloudflare invalid-request tracking (per proxy / IP)
-# =============================================================================
-
-
 class InvalidRequestTracker:
-    """Sliding-window counter for Cloudflare-counted invalid responses.
-
-    Counts 401, 403, and 429 except scope=shared (Discord documents those as
-    not counting toward the 10k / 10 min Cloudflare invalid budget).
-    """
 
     def __init__(self, window: float = INVALID_REQUEST_WINDOW, limit: int = INVALID_REQUEST_LIMIT) -> None:
         self.window = window
@@ -316,15 +281,12 @@ class InvalidRequestTracker:
         return self.count() >= self.limit
 
     def wait_seconds(self) -> float:
-        """Seconds until the oldest invalid expires out of the window, if quarantined."""
         self._prune(time.monotonic())
         if len(self._ts) < self.limit:
             return 0.0
         return max(0.0, self._ts[0] + self.window - time.monotonic())
 
-
 class ProxyRateLimiter:
-    """Per-proxy limiter driven exclusively by Discord rate-limit headers."""
 
     def __init__(self) -> None:
         self.remaining: Optional[int] = None
@@ -378,12 +340,10 @@ class ProxyRateLimiter:
         if bucket:
             self.bucket = str(bucket)
 
-        # Exhausted bucket: cool down until Discord says the window resets.
         if self.remaining is not None and self.remaining <= 0 and self.reset_after:
             self.apply_cooldown(self.reset_after, is_global=False)
 
     async def try_acquire(self) -> bool:
-        """Take one token if this IP can fire now. Never waits — caller switches IP."""
         async with self._lock:
             now = time.monotonic()
             if self.cooldown_until > now:
@@ -393,12 +353,6 @@ class ProxyRateLimiter:
             if self.remaining is not None:
                 self.remaining = max(0, self.remaining - 1)
             return True
-
-
-# =============================================================================
-# Proxy manager
-# =============================================================================
-
 
 @dataclass
 class Proxy:
@@ -422,7 +376,6 @@ class Proxy:
         return "ok"
 
     def is_spent(self) -> bool:
-        """True when this exit IP must not be reused (dead, cooldown, empty bucket, CF)."""
         if self.dead_until > time.monotonic():
             return True
         if self.invalid.is_quarantined():
@@ -439,7 +392,6 @@ class Proxy:
         return max(self.limiter.wait_seconds(), self.invalid.wait_seconds(), dead_wait)
 
     def mark_dead(self, seconds: float) -> None:
-        """Temporarily remove this proxy from rotation. Does not affect other proxies."""
         self.dead_until = max(self.dead_until, time.monotonic() + max(0.0, seconds))
 
     def record_success(self) -> None:
@@ -449,7 +401,6 @@ class Proxy:
     def record_429(self, retry_after: float) -> None:
         self.consecutive_429 += 1
         self.consecutive_failures = 0
-        # Extra cooldown if this IP is getting hammered — other workers keep going.
         if self.consecutive_429 >= MAX_429_BEFORE_COOLDOWN:
             extra = max(retry_after, 1.0) * self.consecutive_429
             self.mark_dead(min(extra, DEAD_COOLDOWN_SECONDS))
@@ -460,9 +411,7 @@ class Proxy:
             self.mark_dead(DEAD_COOLDOWN_SECONDS)
             self.consecutive_failures = 0
 
-
 def _mask_proxy_url(url: str) -> str:
-    """Hide credentials in the live UI."""
     if "@" in url:
         creds, host = url.rsplit("@", 1)
         scheme = ""
@@ -475,9 +424,7 @@ def _mask_proxy_url(url: str) -> str:
         return f"{scheme}***@{host}"
     return url
 
-
 def parse_proxy_line(line: str) -> Optional[str]:
-    """Accept host:port, user:pass@host:port, host:port:user:pass, or a full URL."""
     line = line.strip()
     if not line or line.startswith("#"):
         return None
@@ -495,7 +442,6 @@ def parse_proxy_line(line: str) -> Optional[str]:
         return f"http://{user_q}:{pass_q}@{host}:{port}"
     return None
 
-
 def load_proxy_list(path: str) -> list[str]:
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Proxy list not found: {path}")
@@ -511,17 +457,7 @@ def load_proxy_list(path: str) -> list[str]:
         raise RuntimeError(f"No valid proxies in {path}")
     return urls
 
-
 class ProxyManager:
-    """Acquire an exit IP without ever stalling the whole checker on one 429.
-
-    Modes
-    -----
-    rotating : pool de sessid (keep-alive). Même IP jusqu'au 429, puis CE slot
-               est remplacé. unique_session_per_request=true → IP à chaque req.
-    sticky   : identique, lifetime provider plus long.
-    list     : proxies.txt. Round-robin + cooldown / mort temporaire par ligne.
-    """
 
     def __init__(
         self,
@@ -533,7 +469,7 @@ class ProxyManager:
         rotating_display: str = "",
     ) -> None:
         self.proxies = proxies
-        self.mode = mode  # rotating | sticky | list
+        self.mode = mode
         self._factory = factory
         self._rotating_url = rotating_url
         self._rotating_display = rotating_display
@@ -543,7 +479,6 @@ class ProxyManager:
 
     @property
     def can_replace(self) -> bool:
-        """True si un slot spent peut être remplacé par une nouvelle session (nouvelle IP)."""
         return self._factory is not None
 
     def release(self, proxy: Proxy) -> None:
@@ -558,7 +493,6 @@ class ProxyManager:
         return new
 
     def _drop_unlocked(self, proxy: Proxy) -> Optional[Proxy]:
-        """Throw away this session and put a fresh one in the same slot."""
         if not self.can_replace:
             return None
         try:
@@ -568,7 +502,6 @@ class ProxyManager:
         return self._replace_at(idx)
 
     def _sweep_unlocked(self) -> None:
-        """Replace every spent slot so a 429 never lingers in the pool."""
         if not self.can_replace:
             return
         for i, proxy in enumerate(list(self.proxies)):
@@ -576,14 +509,12 @@ class ProxyManager:
                 self._replace_at(i)
 
     async def drop(self, proxy: Proxy) -> None:
-        """429 / IP brûlée : jeter CE slot, les autres workers gardent leur IP."""
         if not self.can_replace:
             return
         async with self._lock:
             self._drop_unlocked(proxy)
 
     def _new_rotating_handle(self) -> Proxy:
-        # Uniquement si unique_session_per_request : nouvelle IP à chaque acquire.
         session_id = secrets.token_hex(8)
         user = _rotating_session_user(session_id)
         url = _gateway_auth_url(user)
@@ -596,8 +527,6 @@ class ProxyManager:
         )
 
     async def acquire(self) -> Proxy:
-        """Return a live IP. Never sleeps on another request's Retry-After."""
-        # Nouvelle IP à chaque requête (opt-in). Sinon : pool sticky jusqu'au 429.
         if self.mode == "rotating" and UNIQUE_SESSION_PER_REQUEST:
             return self._new_rotating_handle()
 
@@ -628,11 +557,7 @@ class ProxyManager:
 
             await asyncio.sleep(min(max(wait, 0.02), 0.5))
 
-
 def _detect_provider() -> str:
-    explicit = GATEWAY_PROVIDER
-    if explicit in ("dataimpulse", "proxyscrape"):
-        return explicit
     host = GATEWAY_HOST.lower()
     if "dataimpulse" in host:
         return "dataimpulse"
@@ -640,30 +565,22 @@ def _detect_provider() -> str:
         return "proxyscrape"
     return "generic"
 
-
 PROVIDER = _detect_provider() if USE_GATEWAY else "generic"
 
-
 def _gateway_auth_url(username: str) -> str:
-    # Garder ; _ . - pour la syntaxe DataImpulse / ProxyScrape (sessid, session-id).
     user_q = quote(username, safe="_;.-")
     pass_q = quote(GATEWAY_PASS, safe="")
     return f"http://{user_q}:{pass_q}@{GATEWAY_HOST}:{GATEWAY_PORT}"
 
-
 def _dataimpulse_session_user(session_id: str) -> str:
-    """DataImpulse: login__sessid.ID  (ou ;sessid.ID si le login a déjà des params)."""
     base = GATEWAY_USER
-    # Évite un sessid en double si le user dashboard en contient déjà un.
     base = re.sub(r";?sessid\.[^;]*", "", base, flags=re.IGNORECASE)
     base = re.sub(r";?sid\.[^;]*", "", base, flags=re.IGNORECASE)
     if "__" in base:
         return f"{base};sessid.{session_id}"
     return f"{base}__sessid.{session_id}"
 
-
 def _rotating_session_user(session_id: str) -> str:
-    """Identité unique → nouvelle IP, et URL proxy unique → aiohttp ne recycle pas le tunnel."""
     if PROVIDER == "dataimpulse":
         return _dataimpulse_session_user(session_id)
     if PROVIDER == "proxyscrape":
@@ -674,23 +591,14 @@ def _rotating_session_user(session_id: str) -> str:
         lifetime=1,
     )
 
-
-def _sticky_proxy() -> Proxy:
+def _gateway_proxy() -> Proxy:
     session_id = secrets.token_hex(6)
-    if PROVIDER == "dataimpulse":
-        username = _dataimpulse_session_user(session_id)
-    else:
-        username = GATEWAY_USERNAME_TEMPLATE.format(
-            user=GATEWAY_USER,
-            session=session_id,
-            lifetime=GATEWAY_SESSION_LIFETIME,
-        )
+    username = _rotating_session_user(session_id)
     url = _gateway_auth_url(username)
     return Proxy(url=url, display=_mask_proxy_url(url), session_id=session_id)
 
-
 def build_proxy_manager() -> ProxyManager:
-    if USE_GATEWAY and GATEWAY_MODE == "rotating" and UNIQUE_SESSION_PER_REQUEST:
+    if USE_GATEWAY and UNIQUE_SESSION_PER_REQUEST:
         url = _gateway_auth_url(GATEWAY_USER)
         handle = Proxy(url=url, display=_mask_proxy_url(url))
         return ProxyManager(
@@ -700,25 +608,16 @@ def build_proxy_manager() -> ProxyManager:
             rotating_display=handle.display,
         )
     if USE_GATEWAY:
-        # rotating / sticky : pool de sessid. 429 → ce slot est remplacé, les autres gardent leur IP.
-        slots = max(1, GATEWAY_SESSIONS)
-        if GATEWAY_MODE == "rotating":
-            slots = max(slots, MAX_CONCURRENT)
+        slots = max(1, GATEWAY_SESSIONS, MAX_CONCURRENT)
         return ProxyManager(
-            [_sticky_proxy() for _ in range(slots)],
-            mode=GATEWAY_MODE,
-            factory=_sticky_proxy,
+            [_gateway_proxy() for _ in range(slots)],
+            mode="rotating",
+            factory=_gateway_proxy,
         )
     return ProxyManager(
         [Proxy(url=u, display=_mask_proxy_url(u)) for u in load_proxy_list(PROXIES_FILE)],
         mode="list",
     )
-
-
-# =============================================================================
-# Persistent hit / taken / error store (resume-safe)
-# =============================================================================
-
 
 def _load_username_set(path: str) -> set[str]:
     names: set[str] = set()
@@ -731,13 +630,7 @@ def _load_username_set(path: str) -> set[str]:
                 names.add(name)
     return names
 
-
 class ResultStore:
-    """Append-only available/taken/errors. Buffered flush — fsync only on close.
-
-    Resume skips available.txt + taken.txt. errors.txt is a run log: those
-    names are retried on the next launch.
-    """
 
     def __init__(self, available_path: str, taken_path: str, errors_path: str) -> None:
         self.available_path = available_path
@@ -765,7 +658,6 @@ class ResultStore:
         self._dirty = 0
 
     async def save(self, username: str, taken: bool) -> bool:
-        """Persist one result. Returns False if it was already stored."""
         async with self._lock:
             if self.already_checked(username):
                 return False
@@ -791,12 +683,6 @@ class ResultStore:
             except OSError:
                 pass
             fp.close()
-
-
-# =============================================================================
-# Stats (single-threaded asyncio: no extra locks needed)
-# =============================================================================
-
 
 @dataclass
 class Stats:
@@ -836,12 +722,6 @@ class Stats:
     def elapsed(self) -> float:
         return time.monotonic() - self.started_at
 
-
-# =============================================================================
-# Username file loading
-# =============================================================================
-
-
 def load_usernames(path: str) -> list[str]:
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Username list not found: {path}")
@@ -858,12 +738,6 @@ def load_usernames(path: str) -> list[str]:
             ordered.append(name)
     return ordered
 
-
-# =============================================================================
-# HTTP helpers
-# =============================================================================
-
-
 def _header_float(headers, name: str) -> Optional[float]:
     raw = headers.get(name)
     if raw is None:
@@ -873,16 +747,12 @@ def _header_float(headers, name: str) -> Optional[float]:
     except (TypeError, ValueError):
         return None
 
-
 def _close_tunnel(resp: aiohttp.ClientResponse) -> None:
-    """Drop the CONNECT tunnel so the next request gets a new exit IP."""
     conn = resp.connection
     if conn is not None and not conn.closed:
         conn.close()
 
-
 async def parse_retry_after(resp: aiohttp.ClientResponse) -> float:
-    """Discord JSON retry_after is the real bucket. Huge CF Retry-After = IP burned."""
     header_val = _header_float(resp.headers, "Retry-After")
     body: dict = {}
     try:
@@ -900,44 +770,30 @@ async def parse_retry_after(resp: aiohttp.ClientResponse) -> float:
 
     reset_val = _header_float(resp.headers, "X-RateLimit-Reset-After")
 
-    # Le JSON Discord (secondes, float) est la source de vérité.
     if json_val is not None and json_val >= 0:
         return json_val
     for candidate in (reset_val, header_val):
         if candidate is not None and 0 <= candidate <= HUGE_RETRY_AFTER:
             return candidate
-    # Header Cloudflare énorme : on le remonte pour les logs, le worker ne sleep pas dessus.
     if header_val is not None and header_val >= 0:
         return header_val
     return 1.0
 
-
 def is_cloudflare_invalid(status: int, scope: str) -> bool:
-    """401/403 always count. 429 counts unless Discord marks the scope as shared."""
     if status in (401, 403):
         return True
     if status == 429:
         return scope.lower() != "shared"
     return False
 
-
-# =============================================================================
-# Debug: username + exit IP per request
-# =============================================================================
-
-# Cache IP par URL de proxy (sticky/list : même session = même IP).
-# Jamais utilisé en rotating : chaque CONNECT peut changer d'IP.
 _exit_ip_cache: dict[str, str] = {}
 _exit_ip_lock = asyncio.Lock()
 
-
 def debug_log(username: str, ip: str, status: str, detail: str) -> None:
-    """Print above the Live UI. Safe to call from workers."""
     console.log(
         f"[magenta]debug[/]  user=[bold white]{username}[/]  "
         f"ip=[cyan]{ip}[/]  {status}  {detail}"
     )
-
 
 async def resolve_exit_ip(
     session: aiohttp.ClientSession,
@@ -945,7 +801,6 @@ async def resolve_exit_ip(
     *,
     cache: bool,
 ) -> str:
-    """Public IP seen through this proxy. Separate CONNECT from Discord in rotating."""
     if cache:
         async with _exit_ip_lock:
             cached = _exit_ip_cache.get(proxy.url)
@@ -969,12 +824,6 @@ async def resolve_exit_ip(
             _exit_ip_cache[proxy.url] = ip
     return ip
 
-
-# =============================================================================
-# Live UI
-# =============================================================================
-
-
 def _fmt_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
     h, rem = divmod(seconds, 3600)
@@ -982,7 +831,6 @@ def _fmt_duration(seconds: float) -> str:
     if h:
         return f"{h:d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
-
 
 def _bar(done: int, total: int, width: int = 42) -> Text:
     pct = 1.0 if total <= 0 else min(1.0, done / total)
@@ -993,17 +841,15 @@ def _bar(done: int, total: int, width: int = 42) -> Text:
     text.append(f"  {pct:6.1%}")
     return text
 
-
 def _mode_label(pool: ProxyManager) -> str:
     if pool.mode == "rotating" and UNIQUE_SESSION_PER_REQUEST:
-        return f"[green]Rotating[/] · {PROVIDER} · {MAX_CONCURRENT} conc · IP/req"
-    if pool.mode in ("rotating", "sticky"):
+        return f"[green]Rotating[/] · {MAX_CONCURRENT} conc · IP/req"
+    if pool.mode == "rotating":
         return (
-            f"[green]Reuse until 429[/] · {PROVIDER} · {len(pool.proxies)} IPs · "
+            f"[green]Reuse until 429[/] · {len(pool.proxies)} IPs · "
             f"[cyan]{pool.rotations}[/] rotations"
         )
     return f"List ({len(pool.proxies)} proxies)"
-
 
 def render_ui(stats: Stats, pool: ProxyManager) -> Group:
     elapsed = stats.elapsed
@@ -1065,11 +911,11 @@ def render_ui(stats: Stats, pool: ProxyManager) -> Group:
             str(stats.invalid_format),
         )
 
-    panels = [Panel(info, title="[bold]Discord Username Checker[/]", border_style="cyan")]
+    panels = [Panel(info, title="[bold]doguc[/]", border_style="cyan")]
 
     if not UNIQUE_SESSION_PER_REQUEST:
         proxy_table = Table(
-            title="IPs (même session jusqu'au 429 → ce slot seulement est remplacé)",
+            title="IPs (same session until 429 → only this slot is replaced)",
             expand=True,
             show_lines=False,
             pad_edge=False,
@@ -1121,33 +967,25 @@ def render_ui(stats: Stats, pool: ProxyManager) -> Group:
 
     if UNIQUE_SESSION_PER_REQUEST:
         footer = Text(
-            "Nouvelle IP à chaque requête · 429 = tunnel jeté · "
-            "Ctrl+C sauve available.txt / taken.txt / errors.txt",
+            "New IP on every request · 429 = tunnel dropped · "
+            "Ctrl+C saves available.txt / taken.txt / errors.txt",
             style="dim",
         )
     else:
         footer = Text(
-            "Même IP jusqu'au 429 · keep-alive · 429 → nouvelle session sur CE slot seulement · "
-            "Ctrl+C sauve available.txt / taken.txt / errors.txt",
+            "Same IP until 429 · keep-alive · 429 → new session on THIS slot only · "
+            "Ctrl+C saves available.txt / taken.txt / errors.txt",
             style="dim",
         )
     panels.append(footer)
     return Group(*panels)
-
-
-# =============================================================================
-# Workers
-# =============================================================================
-
 
 async def check_one(
     session: aiohttp.ClientSession,
     proxy: Proxy,
     username: str,
 ) -> tuple[int, Optional[bool], str, float]:
-    """Return (status, taken|None, scope, retry_after). taken is only set on HTTP 200."""
     retry_after = 0.0
-    # Keep-alive = même IP. On ne ferme le tunnel que si on veut une nouvelle IP tout de suite.
     close_on_success = UNIQUE_SESSION_PER_REQUEST
     async with session.post(
         API_URL,
@@ -1178,13 +1016,11 @@ async def check_one(
             retry_after = await parse_retry_after(resp)
             proxy.limiter.apply_cooldown(retry_after, is_global=is_global)
             proxy.limiter.last_global = is_global
-            # IP épuisée : fermer le tunnel, le pool remplace ce sessid.
             _close_tunnel(resp)
             return resp.status, None, scope, retry_after
 
         _close_tunnel(resp)
         return resp.status, None, scope, retry_after
-
 
 async def worker(
     _worker_id: int,
@@ -1202,7 +1038,6 @@ async def worker(
         except asyncio.TimeoutError:
             continue
 
-        # Backoff réseau sur CE username seulement — les autres workers continuent.
         if last_err == "net" and attempts > 0:
             delay = jittered_backoff(attempts)
             if delay > 0:
@@ -1297,8 +1132,6 @@ async def worker(
                             else f"retry_after={retry_after:.2f}s → new IP  try={attempts + 1}/{MAX_RETRIES}"
                         ),
                     )
-                # Retry immédiat : nouvelle IP (rotating) / autre slot (sticky/list).
-                # On ne sleep PAS Retry-After ici — ça bloquerait ce worker pour rien.
                 if attempts + 1 < MAX_RETRIES and not stop.is_set():
                     await queue.put((username, attempts + 1, "429"))
                 else:
@@ -1338,12 +1171,6 @@ async def worker(
                 pool.release(proxy)
             queue.task_done()
 
-
-# =============================================================================
-# Main
-# =============================================================================
-
-
 def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop: asyncio.Event) -> None:
     def _request_stop() -> None:
         stop.set()
@@ -1353,7 +1180,6 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop: asyncio.Even
             loop.add_signal_handler(sig, _request_stop)
         except (NotImplementedError, RuntimeError):
             signal.signal(sig, lambda *_: _request_stop())
-
 
 async def async_main() -> int:
     try:
@@ -1387,13 +1213,13 @@ async def async_main() -> int:
         f"{stats.invalid_format} invalid · "
         f"{stats.total} to check · "
         f"{len(store.available)} available / {len(store.taken)} taken on disk · "
-        f"mode={pool.mode} provider={PROVIDER} unique_session={UNIQUE_SESSION_PER_REQUEST}[/]"
+        f"mode={pool.mode} unique_session={UNIQUE_SESSION_PER_REQUEST}[/]"
     )
     if DEBUG:
         console.print(
-            "[magenta]Debug ON[/] — chaque requête affiche "
-            f"[bold]username[/] + {'[bold]IP de sortie[/]' if DEBUG_SHOW_IP else 'sans IP'} "
-            "[dim](remettre debug.enabled = false pour le RPS max)[/]"
+            "[magenta]Debug ON[/] — each request logs "
+            f"[bold]username[/] + {'[bold]exit IP[/]' if DEBUG_SHOW_IP else 'no IP'} "
+            "[dim](set debug.enabled = false for max RPS)[/]"
         )
 
     if stats.total == 0:
@@ -1499,14 +1325,12 @@ async def async_main() -> int:
     )
     return 0
 
-
 def main() -> None:
     try:
         raise SystemExit(asyncio.run(async_main()))
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted — progress is on disk.[/]")
         raise SystemExit(130)
-
 
 if __name__ == "__main__":
     main()

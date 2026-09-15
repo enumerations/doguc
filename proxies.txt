@@ -1,10 +1,10 @@
 # Used only when gateway.enabled = false in config.toml.
-# One proxy per line. Supported formats:
+# One proxy per line.
+#
+# Formats:
 #   host:port
-#   user:pass@host:port          (ProxyScrape rotating: username nu)
+#   user:pass@host:port
 #   host:port:user:pass
 #   http://user:pass@host:port
-#   user-session-ID-lifetime-10:pass@host:port  (ProxyScrape sticky)
 #
-# rp.scrapegw.com:6060:USER:PASS
-# USER:PASS@rp.scrapegw.com:6060
+# host.example.com:8080:YOUR_USER:YOUR_PASSWORD
