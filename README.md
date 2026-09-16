@@ -1,32 +1,24 @@
-<p align="center">
-  <img src="assets/logo.png" width="420" alt="doguc">
-</p>
+![doguc](assets/logo.png)
 
-<h1 align="center">doguc</h1>
+# doguc
 
-<p align="center">
-  <strong>d</strong>iscord · <strong>OGU</strong> · <strong>c</strong>hecker<br>
-  Live terminal UI · rotating residential proxies · Ctrl+C and pick up where you left off.
-</p>
+**d**iscord · **OGU** · **c**hecker  
+Fast, resumable Discord username checker with a live terminal UI.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/aiohttp-async-2EA44F?style=for-the-badge" alt="aiohttp">
-  <img src="https://img.shields.io/badge/rich-UI-9B59B6?style=for-the-badge" alt="Rich">
-  <a href="https://github.com/vinny/discord-username-checker/stargazers"><img src="https://img.shields.io/github/stars/vinny/discord-username-checker?style=for-the-badge" alt="Stars"></a>
-  <a href="https://github.com/vinny/discord-username-checker/issues"><img src="https://img.shields.io/github/issues/vinny/discord-username-checker?style=for-the-badge" alt="Issues"></a>
-</p>
+![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)![aiohttp](https://img.shields.io/badge/aiohttp-async-2EA44F?style=for-the-badge)![Rich](https://img.shields.io/badge/rich-UI-9B59B6?style=for-the-badge)![Stars](https://img.shields.io/github/stars/enumerations/doguc?style=for-the-badge)![Issues](https://img.shields.io/github/issues/enumerations/doguc?style=for-the-badge)
 
 ---
 
-Check a list of handles against Discord’s public unique-username endpoint, see **available / taken** in a live dashboard, and keep every result on disk so a crash or `Ctrl+C` never wastes work.
+Check thousands of Discord usernames asynchronously — with live progress, automatic retries, proxy rotation, and crash-safe resume.
 
-## Why people star this
+![doguc live UI](assets/preview.png)
 
-Most checkers either die on the first `429`, or dump you into a wall of logs. This one is built like a production crawler:
+## Why doguc ?
+
+Most Discord username checkers stop when they hit a 429 or leave you with a wall of logs. doguc is designed to keep running and make large checks easy to monitor and resume.
 
 
-|                                 |                                                                                                                 |
+| **Feature**                     | **Description**                                                                                                 |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | **A 429 never stops the run**   | The burned IP is dropped. Other workers keep going. That username retries on a fresh session.                   |
 | **Resume is the default**       | Hits land in `available.txt` / `taken.txt`. Rerun skips them. `errors.txt` is retried next launch.              |
@@ -52,11 +44,11 @@ Most checkers either die on the first `429`, or dump you into a wall of logs. Th
 
 ## Setup
 
-**Requires Python 3.11+** (`tomllib` is in the standard library).
+**Requires Python 3.11+**.
 
 ```bash
-git clone https://github.com/vinny/discord-username-checker.git
-cd discord-username-checker
+git clone https://github.com/enumerations/doguc.git
+cd doguc
 
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -67,7 +59,7 @@ pip install -r requirements.txt
 
 ### 1. Proxy credentials
 
-Open [`config.toml`](config.toml) and fill in your residential gateway:
+Open `[config.toml](config.toml)` and fill in your residential gateway:
 
 ```toml
 [gateway]
@@ -78,17 +70,17 @@ user = "your-username"
 password = "your-password"
 ```
 
-Do not commit real credentials.
+
 
 ### 2. Usernames to check
 
-Edit `[usernames.txt](usernames.txt)` — one name per line, `#` for comments. Invalid names are skipped locally and **never** sent to Discord.
+Edit `[data/usernames.txt](data/usernames.txt)` — one name per line, `#` for comments. Invalid names are skipped locally and **never** sent to Discord.
 
 To use another list, change the path:
 
 ```toml
 [files]
-usernames = "usernames.txt"
+usernames = "data/usernames.txt"
 ```
 
 
@@ -213,11 +205,12 @@ show_exit_ip = true
 ├── checker.py          # the whole checker
 ├── config.toml         # settings + gateway credentials
 ├── proxies.txt         # used when gateway.enabled = false
-├── usernames.txt       # names to check
 ├── requirements.txt
+├── data/
+│   └── usernames.txt   # names to check
 └── assets/
     ├── logo.png
-    └── preview.svg
+    └── preview.png
 ```
 
 
@@ -229,7 +222,7 @@ aiohttp>=3.9.0
 rich>=13.7.0
 ```
 
-That’s it. No Discord bot, no browser, no extra services.
+
 
 ## Disclaimer
 

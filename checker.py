@@ -832,153 +832,81 @@ def _fmt_duration(seconds: float) -> str:
         return f"{h:d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
-def _bar(done: int, total: int, width: int = 42) -> Text:
+def _fmt_int(n: int) -> str:
+    return f"{n:,}"
+
+def _bar(done: int, total: int, width: int = 46) -> Text:
     pct = 1.0 if total <= 0 else min(1.0, done / total)
     filled = int(round(width * pct))
     text = Text()
     text.append("━" * filled, style="cyan")
     text.append("━" * (width - filled), style="dim")
-    text.append(f"  {pct:6.1%}")
+    text.append(f"  {pct:5.1%}")
     return text
 
 def _mode_label(pool: ProxyManager) -> str:
     if pool.mode == "rotating" and UNIQUE_SESSION_PER_REQUEST:
-        return f"[green]Rotating[/] · {MAX_CONCURRENT} conc · IP/req"
+        return "rotating · IP/req"
     if pool.mode == "rotating":
-        return (
-            f"[green]Reuse until 429[/] · {len(pool.proxies)} IPs · "
-            f"[cyan]{pool.rotations}[/] rotations"
-        )
-    return f"List ({len(pool.proxies)} proxies)"
+        return "rotating · reuse"
+    return f"list · {len(pool.proxies)} proxies"
 
-def render_ui(stats: Stats, pool: ProxyManager) -> Group:
-    elapsed = stats.elapsed
+def render_ui(stats: Stats, pool: ProxyManager) -> Panel:
     rps = stats.rps
     remaining = max(0, stats.total - stats.checked)
     eta = remaining / rps if rps > 0 else 0.0
 
-    cooling = sum(1 for p in pool.proxies if p.status() == "cooldown")
-    quarantined = sum(1 for p in pool.proxies if p.status() == "quarantine")
-    dead = sum(1 for p in pool.proxies if p.status() == "dead")
-    ok = len(pool.proxies) - cooling - quarantined - dead
+    progress = Table.grid(padding=(0, 3), expand=True)
+    progress.add_column(style="dim", justify="right", min_width=9)
+    progress.add_column(ratio=1)
+    progress.add_row("progress", _bar(stats.checked, stats.total))
 
-    info = Table.grid(padding=(0, 2))
-    info.add_column(style="bold dim", justify="right")
-    info.add_column()
-    info.add_column(style="bold dim", justify="right")
-    info.add_column()
+    metrics = Table.grid(padding=(0, 3), expand=True)
+    metrics.add_column(style="dim", justify="right", min_width=9)
+    metrics.add_column(ratio=1)
+    metrics.add_column(style="dim", justify="right")
+    metrics.add_column(ratio=1)
 
-    info.add_row("Progress", _bar(stats.checked, stats.total), "Elapsed", _fmt_duration(elapsed))
-    info.add_row(
-        "Checked",
-        f"[bold]{stats.checked}[/] / {stats.total}",
-        "ETA",
-        _fmt_duration(eta) if rps > 0 else "—",
-    )
-    info.add_row(
-        "Speed",
+    metrics.add_row(
+        "checked",
+        f"[bold]{_fmt_int(stats.checked)}[/] / {_fmt_int(stats.total)}",
+        "speed",
         f"[bold cyan]{rps:.1f}[/] req/s",
-        "Mode",
+    )
+    metrics.add_row(
+        "available",
+        f"[bold green]{_fmt_int(stats.available)}[/]",
+        "taken",
+        f"[bold yellow]{_fmt_int(stats.taken)}[/]",
+    )
+    limits = f"[magenta]{_fmt_int(stats.rate_limits)}[/]"
+    if stats.errors:
+        limits += f"  [red]{_fmt_int(stats.errors)} err[/]"
+    metrics.add_row(
+        "eta",
+        _fmt_duration(eta) if rps > 0 else "—",
+        "429",
+        limits,
+    )
+    metrics.add_row(
+        "mode",
         _mode_label(pool),
+        "rotations",
+        f"[cyan]{_fmt_int(pool.rotations)}[/]",
     )
-    info.add_row(
-        "Available",
-        f"[bold green]{stats.available}[/]",
-        "Taken",
-        f"[bold yellow]{stats.taken}[/]",
+    metrics.add_row(
+        "invalid",
+        f"[pink3]{_fmt_int(stats.invalid_format)}[/]",
     )
-    info.add_row(
-        "Rate limits",
-        f"[bold magenta]{stats.rate_limits}[/]  429",
-        "Errors",
-        f"[bold red]{stats.errors}[/]  abandoned {stats.abandoned}",
+
+    return Panel(
+        Group(progress, Text(), metrics),
+        title="[bold]doguc[/]",
+        subtitle=f"[dim]{_fmt_duration(stats.elapsed)}[/]",
+        subtitle_align="right",
+        border_style="cyan",
+        padding=(1, 1),
     )
-    info.add_row(
-        "Retries",
-        str(stats.retries),
-        "IPs",
-        (
-            f"[dim]IP/req · {pool.rotations} sessions[/]"
-            if UNIQUE_SESSION_PER_REQUEST
-            else f"[green]{ok} ok[/]  [yellow]{cooling} cd[/]  [red]{dead} dead[/]  [cyan]{pool.rotations} rot[/]"
-        ),
-    )
-    if stats.skipped_resume or stats.invalid_format:
-        info.add_row(
-            "Resumed skip",
-            str(stats.skipped_resume),
-            "Invalid names",
-            str(stats.invalid_format),
-        )
-
-    panels = [Panel(info, title="[bold]doguc[/]", border_style="cyan")]
-
-    if not UNIQUE_SESSION_PER_REQUEST:
-        proxy_table = Table(
-            title="IPs (same session until 429 → only this slot is replaced)",
-            expand=True,
-            show_lines=False,
-            pad_edge=False,
-        )
-        proxy_table.add_column("Proxy", style="cyan", overflow="fold")
-        proxy_table.add_column("Remaining", justify="right")
-        proxy_table.add_column("Limit", justify="right")
-        proxy_table.add_column("Reset-After", justify="right")
-        proxy_table.add_column("Bucket", overflow="ellipsis")
-        proxy_table.add_column("Invalid/10m", justify="right")
-        proxy_table.add_column("Status", justify="center")
-
-        shown = pool.proxies if len(pool.proxies) <= 10 else (
-            sorted(pool.proxies, key=lambda p: p.wait_seconds(), reverse=True)[:10]
-        )
-        for p in shown:
-            st = p.status()
-            st_style = {
-                "ok": "green",
-                "cooldown": "yellow",
-                "quarantine": "red",
-                "dead": "red",
-            }[st]
-            rem = "—" if p.limiter.remaining is None else str(p.limiter.remaining)
-            lim = "—" if p.limiter.limit is None else str(p.limiter.limit)
-            rst = "—" if p.limiter.reset_after is None else f"{p.limiter.reset_after:.2f}s"
-            extra = ""
-            if st == "cooldown":
-                extra = f" {p.limiter.wait_seconds():.1f}s"
-            elif st == "quarantine":
-                extra = f" {p.invalid.wait_seconds():.0f}s"
-            elif st == "dead":
-                extra = f" {p.wait_seconds():.1f}s"
-            scope = p.limiter.last_scope
-            if p.limiter.last_global:
-                extra += " global"
-            elif scope:
-                extra += f" {scope}"
-            proxy_table.add_row(
-                p.display,
-                rem,
-                lim,
-                rst,
-                p.limiter.bucket or "—",
-                f"{p.invalid.count()}/{INVALID_REQUEST_LIMIT}",
-                f"[{st_style}]{st}{extra}[/]",
-            )
-        panels.append(Panel(proxy_table, border_style="blue"))
-
-    if UNIQUE_SESSION_PER_REQUEST:
-        footer = Text(
-            "New IP on every request · 429 = tunnel dropped · "
-            "Ctrl+C saves available.txt / taken.txt / errors.txt",
-            style="dim",
-        )
-    else:
-        footer = Text(
-            "Same IP until 429 · keep-alive · 429 → new session on THIS slot only · "
-            "Ctrl+C saves available.txt / taken.txt / errors.txt",
-            style="dim",
-        )
-    panels.append(footer)
-    return Group(*panels)
 
 async def check_one(
     session: aiohttp.ClientSession,
@@ -1281,25 +1209,10 @@ async def async_main() -> int:
                 render_ui(stats, pool),
                 console=console,
                 refresh_per_second=UI_REFRESH_HZ,
-                transient=False,
-            ) as live:
-                ui_task_stop = asyncio.Event()
-
-                async def _ui_loop() -> None:
-                    while not ui_task_stop.is_set():
-                        live.update(render_ui(stats, pool))
-                        try:
-                            await asyncio.wait_for(ui_task_stop.wait(), timeout=1 / UI_REFRESH_HZ)
-                        except asyncio.TimeoutError:
-                            continue
-                    live.update(render_ui(stats, pool))
-
-                ui_task = asyncio.create_task(_ui_loop())
-                try:
-                    await _join_or_stop()
-                finally:
-                    ui_task_stop.set()
-                    await ui_task
+                transient=True,
+                get_renderable=lambda: render_ui(stats, pool),
+            ):
+                await _join_or_stop()
     finally:
         stop.set()
         for t in worker_tasks:
@@ -1308,6 +1221,7 @@ async def async_main() -> int:
             await asyncio.gather(*worker_tasks, return_exceptions=True)
         store.close()
 
+    console.print(render_ui(stats, pool))
     console.print()
     console.print(
         Panel(
