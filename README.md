@@ -2,10 +2,9 @@
 
 # doguc
 
-**d**iscord · **OGU** · **c**hecker  
 Fast, resumable Discord username checker with a live terminal UI.
 
-![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)![aiohttp](https://img.shields.io/badge/aiohttp-async-2EA44F?style=for-the-badge)![Rich](https://img.shields.io/badge/rich-UI-9B59B6?style=for-the-badge)![Stars](https://img.shields.io/github/stars/enumerations/doguc?style=for-the-badge)![Issues](https://img.shields.io/github/issues/enumerations/doguc?style=for-the-badge)
+![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)&emsp;![aiohttp](https://img.shields.io/badge/aiohttp-async-2EA44F?style=for-the-badge)&emsp;![Rich](https://img.shields.io/badge/rich-UI-9B59B6?style=for-the-badge)&emsp;![Stars](https://img.shields.io/github/stars/enumerations/doguc?style=for-the-badge)&emsp;![Issues](https://img.shields.io/github/issues/enumerations/doguc?style=for-the-badge)
 
 ---
 
@@ -13,7 +12,7 @@ Check thousands of Discord usernames asynchronously — with live progress, auto
 
 ![doguc live UI](assets/preview.png)
 
-## Why doguc ?
+## Why doguc (aka **d**iscord **OG U**sername **c**hecker) ?
 
 Most Discord username checkers stop when they hit a 429 or leave you with a wall of logs. doguc is designed to keep running and make large checks easy to monitor and resume.
 
@@ -59,7 +58,7 @@ pip install -r requirements.txt
 
 ### 1. Proxy credentials
 
-Open `[config.toml](config.toml)` and fill in your residential gateway:
+Open [`config.toml`](config.toml) and fill in your residential gateway:
 
 ```toml
 [gateway]
@@ -74,7 +73,7 @@ password = "your-password"
 
 ### 2. Usernames to check
 
-Edit `[data/usernames.txt](data/usernames.txt)` — one name per line, `#` for comments. Invalid names are skipped locally and **never** sent to Discord.
+Edit [`data/usernames.txt`](data/usernames.txt) — one name per line, `#` for comments. Invalid names are skipped locally and **never** sent to Discord.
 
 To use another list, change the path:
 
@@ -89,7 +88,7 @@ usernames = "data/usernames.txt"
 
 **Gateway (default)** — `gateway.enabled = true` in `config.toml`. Credentials are the `host` / `port` / `user` / `password` fields in that same file.
 
-**Static list** — set `enabled = false`, then put one proxy per line in `[proxies.txt](proxies.txt)`:
+**Static list** — set `enabled = false`, then put one proxy per line in [`proxies.txt`](proxies.txt):
 
 ```text
 host:port
