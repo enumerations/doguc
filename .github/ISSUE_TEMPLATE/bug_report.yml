@@ -2,116 +2,113 @@ name: Bug report
 description: Report a problem or unexpected behavior
 title: "[bug] "
 labels:
+  - bug
 
-* bug
-  body:
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug!
 
-* type: markdown
-  attributes:
-  value: |
-  Thanks for taking the time to report a bug!
+        Please provide enough information to help us reproduce and investigate the issue.
 
-  ```
-  Please provide enough information to help us reproduce and investigate the issue.
-  ```
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: Clearly describe the problem you encountered.
+      placeholder: What happened?
+    validations:
+      required: true
 
-* type: textarea
-  id: description
-  attributes:
-  label: Describe the bug
-  description: Clearly describe the problem you encountered.
-  placeholder: What happened?
-  validations:
-  required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide the steps needed to reproduce the issue.
+      placeholder: |
+        1. Run `python script.py`
+        2. ...
+        3. ...
+        4. The following error occurs...
+    validations:
+      required: true
 
-* type: textarea
-  id: reproduce
-  attributes:
-  label: Steps to reproduce
-  description: Provide the steps needed to reproduce the issue.
-  placeholder: |
-  1. Run `python script.py`
-  2. ...
-  3. ...
-  4. The following error occurs...
-  validations:
-  required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+      placeholder: What should have happened?
+    validations:
+      required: true
 
-* type: textarea
-  id: expected
-  attributes:
-  label: Expected behavior
-  description: What did you expect to happen?
-  placeholder: What should have happened?
-  validations:
-  required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened?
+      placeholder: What happened instead?
 
-* type: textarea
-  id: actual
-  attributes:
-  label: Actual behavior
-  description: What actually happened?
-  placeholder: What happened instead?
+  - type: input
+    id: project_version
+    attributes:
+      label: Project version
+      description: Which version of the project are you using?
+      placeholder: "e.g. v1.2.0"
+    validations:
+      required: true
 
-* type: input
-  id: project_version
-  attributes:
-  label: Project version
-  description: Which version of the project are you using?
-  placeholder: "e.g. v1.2.0"
-  validations:
-  required: true
+  - type: input
+    id: python_version
+    attributes:
+      label: Python version
+      description: Run `python --version` to find your Python version.
+      placeholder: "e.g. Python 3.12.6"
+    validations:
+      required: true
 
-* type: input
-  id: python_version
-  attributes:
-  label: Python version
-  description: Run `python --version` to find your Python version.
-  placeholder: "e.g. Python 3.12.6"
-  validations:
-  required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
 
-* type: dropdown
-  id: os
-  attributes:
-  label: Operating system
-  options:
-  - Windows
-  - macOS
-  - Linux
-  - Other
-  validations:
-  required: true
+  - type: input
+    id: os_version
+    attributes:
+      label: Operating system version
+      placeholder: "e.g. Windows 11, Ubuntu 24.04, macOS 15.6"
 
-* type: input
-  id: os_version
-  attributes:
-  label: Operating system version
-  placeholder: "e.g. Windows 11, Ubuntu 24.04, macOS 15.6"
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Error message / traceback
+      description: |
+        If applicable, paste the complete Python traceback here.
+        Remove any passwords, tokens, API keys, or other sensitive information.
+      render: python
 
-* type: textarea
-  id: traceback
-  attributes:
-  label: Error message / traceback
-  description: |
-  If applicable, paste the complete Python traceback here.
-  Remove any passwords, tokens, API keys, or other sensitive information.
-  render: python
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional context
+      description: Add any other information that may help investigate the issue.
 
-* type: textarea
-  id: additional_context
-  attributes:
-  label: Additional context
-  description: Add any other information that may help investigate the issue.
-
-* type: checkboxes
-  id: checklist
-  attributes:
-  label: Checklist
-  options:
-  - label: I have searched existing issues and did not find a duplicate.
-  required: true
-  - label: I am using a supported Python version.
-  required: true
-  - label: I have removed sensitive information from the traceback and logs.
-  required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues and did not find a duplicate.
+          required: true
+        - label: I am using a supported Python version.
+          required: true
+        - label: I have removed sensitive information from the traceback and logs.
+          required: true
