@@ -62,7 +62,7 @@ pip install -r requirements.txt
 
 ### 1. Proxy credentials
 
-Open `[config.toml](config.toml)` and fill in your residential gateway:
+Open [`config.toml`](config.toml) and fill in your residential gateway:
 
 ```toml
 [gateway]
@@ -78,7 +78,7 @@ username_template = "{user};sessid.{session}"   # from your provider docs
 
 ### 2. Usernames to check
 
-Edit `[data/usernames.txt](data/usernames.txt)` — one name per line, `#` for comments. Invalid names are skipped locally and **never** sent to Discord.
+Edit [`data/usernames.txt`](data/usernames.txt) — one name per line, `#` for comments. Invalid names are skipped locally and **never** sent to Discord.
 
 To use another list, change the path:
 
@@ -93,7 +93,7 @@ usernames = "data/usernames.txt"
 
 **Gateway (default)** — `gateway.enabled = true` in `config.toml`. Credentials are the `host` / `port` / `user` / `password` fields in that same file.
 
-**Static list** — set `enabled = false`, then put one proxy per line in `[proxies.txt](proxies.txt)`:
+**Static list** — set `enabled = false`, then put one proxy per line in [`proxies.txt`](proxies.txt):
 
 ```text
 host:port
