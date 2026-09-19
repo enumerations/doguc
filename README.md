@@ -12,18 +12,19 @@ Check thousands of Discord usernames asynchronously — with live progress, auto
 
 ![doguc live UI](assets/preview.png)
 
-## Why doguc (aka **d**iscord **OG U**sername **c**hecker) ?
+## Why doguc ?
 
 Most Discord username checkers stop when they hit a 429 or leave you with a wall of logs. doguc is designed to keep running and make large checks easy to monitor and resume.
 
 
-| **Feature**                     | **Description**                                                                                                 |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| **A 429 never stops the run**   | The burned IP is dropped. Other workers keep going. That username retries on a fresh session.                   |
-| **Resume is the default**       | Hits land in `available.txt` / `taken.txt`. Rerun skips them. `errors.txt` is retried next launch.              |
-| **Honest Discord headers**      | Bucket remaining, reset-after, and Cloudflare invalid-request budget are tracked **per exit IP**.               |
-| **A UI you can actually watch** | Progress, req/s, ETA, available vs taken, proxy health — powered by [Rich](https://github.com/Textualize/rich). |
-| **No Discord token**            | Unauthenticated `username-attempt-unauthed`. Secrets are only your **proxy** credentials.                       |
+| **Feature**                       | **Description**                                                                                                                 |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **A 429 never stops the run**     | The burned IP is dropped immediately (no Retry-After wait). Other workers keep going. That username retries on a fresh session. |
+| **Network-error circuit breaker** | A burst of **network** errors pauses new work until the storm is actually quiet. 429s do not trip it.                           |
+| **Resume is the default**         | Hits land in `available.txt` / `taken.txt`. Rerun skips them. `errors.txt` is retried next launch.                              |
+| **Honest Discord headers**        | Bucket remaining, reset-after, and Cloudflare invalid-request budget are tracked **per exit IP**.                               |
+| **A UI you can actually watch**   | Progress, req/s, ETA, available vs taken, proxy health — powered by [Rich](https://github.com/Textualize/rich).                 |
+| **No Discord token**              | Unauthenticated `username-attempt-unauthed`. Secrets are only your **proxy** credentials.                                       |
 
 
 
@@ -32,7 +33,10 @@ Most Discord username checkers stop when they hit a 429 or leave you with a wall
 
 - **asyncio workers** with a bounded semaphore (`max_concurrent`) and a retry queue
 - **Residential gateway** (`user:pass@host:port`) or a static `proxies.txt` list
-- **Rotating** — reuse a session until Discord/Cloudflare burns it, then replace *that slot only*
+- **Provider-agnostic sticky sessions** — `username_template` with `{user}` / `{session}` / `{lifetime}` (copy the format from your gateway docs)
+- **Sticky until 429** — reuse a sessid + keep-alive until Discord burns that IP, then replace *that slot only*
+- **No Retry-After waiting** — a 429 drops the IP and opens a new session immediately
+- **Pause on network-error bursts** — workers stop until there are no network errors for `quiet_seconds`; a few probes keep checking. 429s are ignored by this circuit
 - **Static list** — `proxies.txt` with round-robin, cooldown, and temporary death
 - **Optional IP-per-request** if you prefer fewer 429s over raw throughput
 - **Strict username validation** before anything hits the API (`a-z0-9._`, 2–32 chars, no `..`)
@@ -58,7 +62,7 @@ pip install -r requirements.txt
 
 ### 1. Proxy credentials
 
-Open [`config.toml`](config.toml) and fill in your residential gateway:
+Open `[config.toml](config.toml)` and fill in your residential gateway:
 
 ```toml
 [gateway]
@@ -67,13 +71,14 @@ host = "gw.your-provider.com"
 port = 8080
 user = "your-username"
 password = "your-password"
+username_template = "{user};sessid.{session}"   # from your provider docs
 ```
 
 
 
 ### 2. Usernames to check
 
-Edit [`data/usernames.txt`](data/usernames.txt) — one name per line, `#` for comments. Invalid names are skipped locally and **never** sent to Discord.
+Edit `[data/usernames.txt](data/usernames.txt)` — one name per line, `#` for comments. Invalid names are skipped locally and **never** sent to Discord.
 
 To use another list, change the path:
 
@@ -88,7 +93,7 @@ usernames = "data/usernames.txt"
 
 **Gateway (default)** — `gateway.enabled = true` in `config.toml`. Credentials are the `host` / `port` / `user` / `password` fields in that same file.
 
-**Static list** — set `enabled = false`, then put one proxy per line in [`proxies.txt`](proxies.txt):
+**Static list** — set `enabled = false`, then put one proxy per line in `[proxies.txt](proxies.txt)`:
 
 ```text
 host:port
@@ -104,6 +109,8 @@ http://user:pass@host:port
 ```bash
 python checker.py
 ```
+
+On launch you are asked whether to **continue the previous run** (default: yes) or wipe `available.txt` / `taken.txt` / `errors.txt` and start over. Non-interactive runs always continue.
 
 Stop with `Ctrl+C`. Progress is already on disk. Start again to continue.
 
@@ -132,15 +139,25 @@ usernames.txt ──► validate ──► skip if already in available/taken
                                       ▼
               POST /api/v9/unique-username/username-attempt-unauthed
                                       │
-                    ┌─────────────────┼─────────────────┐
-                    ▼                 ▼                 ▼
-                 taken            available            429 / net
-                    │                 │                 │
-                    ▼                 ▼                 ▼
-               taken.txt        available.txt     drop IP, retry name
+              ┌───────────┬───────────┼───────────┬───────────┐
+              ▼           ▼           ▼           ▼
+           taken      available      429        net error
+              │           │           │           │
+              ▼           ▼           ▼           ▼
+         taken.txt  available.txt  drop IP,     drop IP, retry
+                                   retry now        │
+                                                    ▼
+                                     burst of net errors → pause until quiet
 ```
 
 On HTTP 200 the JSON field `taken` is a boolean. Anything else is treated as a retryable miss, not a false “available”.
+
+**429 vs network errors**
+
+- **429** — that sticky IP is retired and replaced. The username is retried on a new session right away. Discord’s `Retry-After` is **not** waited on.
+- **Network errors** (timeouts, CONNECT, resets) — same drop + retry, plus a short jittered backoff. If too many land in a short window, the checker **pauses** (UI: `paused MM:SS`). A few probe requests keep running. Each new network error resets the quiet timer; once `quiet_seconds` pass with none, workers resume by themselves. 429s do not count toward that pause.
+
+
 
 ## Proxy modes
 
@@ -157,7 +174,16 @@ Set these in `config.toml` under `[gateway]`.
 [gateway]
 enabled = true
 unique_session_per_request = false   # true = new IP every request (fewer 429s, less RPS)
-sessions = 400                       # parallel sessions ≈ max_concurrent
+sessions = 400                       # parallel sticky IPs ≈ max_concurrent
+```
+
+`username_template` is **not** provider-specific code. Copy the sticky-session username format from your gateway and keep `{user}` + `{session}` (optional `{lifetime}`):
+
+```text
+"{user};sessid.{session}"                         # DataImpulse
+"{user}-session-{session}-lifetime-{lifetime}"    # ProxyScrape
+"{user}-session-{session}"                        # Bright Data / many
+"{user}_session-{session}"                        # IPRoyal
 ```
 
 
@@ -183,8 +209,18 @@ sessions = 400                       # parallel sessions ≈ max_concurrent
 | ------------------------------------- | ------------------------------------------- |
 | `low_remaining_threshold`             | Drop an IP when Discord remaining hits this |
 | `max_inflight_per_ip`                 | Usually `1` — one request per exit IP       |
-| `huge_retry_after`                    | Treat a giant Retry-After as a burned IP    |
 | `cloudflare.window_seconds` / `limit` | Stay under CF’s invalid-request budget      |
+
+
+**Pause (network-error circuit breaker)**
+
+
+| Key              | Role                                                                |
+| ---------------- | ------------------------------------------------------------------- |
+| `error_limit`    | How many **network** errors in `window_seconds` trip the pause      |
+| `window_seconds` | Sliding window for that count                                       |
+| `quiet_seconds`  | Resume after this long with **no** network errors (timer resets)    |
+| `probes`         | Requests allowed through during pause, so we can see when it calmed |
 
 
 Turn on per-request logs when you are debugging proxies — it **will** tank RPS:

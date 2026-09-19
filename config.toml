@@ -15,11 +15,19 @@ password = "YOUR_PASSWORD"
 # true  = new IP on EVERY request (fewer 429s, lower RPS).
 unique_session_per_request = false
 
-# How many IPs to hold in parallel. Each slot is one sessid, reused until a 429.
+# Parallel sticky IPs. Each slot is one sessid, reused until a 429.
 # Set this ≈ max_concurrent (1 in-flight request per IP).
 sessions = 400
-# Session username ({user}, {session}, {lifetime}).
-username_template = "{user}-session-{session}-lifetime-{lifetime}"
+
+# Sticky session encoded in the proxy username. Not provider-specific code:
+# copy the format from your gateway docs. Placeholders: {user} {session} {lifetime}
+#
+#   "{user};sessid.{session}"                         # DataImpulse
+#   "{user}-session-{session}-lifetime-{lifetime}"    # ProxyScrape
+#   "{user}-session-{session}"                        # Bright Data / many
+#   "{user}_session-{session}"                        # IPRoyal
+#
+username_template = "{user};sessid.{session}"
 
 [files]
 usernames = "data/usernames.txt"
@@ -45,7 +53,7 @@ workers = 450
 # Small delay after acquiring a slot. Leave at 0 in rotating mode.
 base_delay = 0.0
 # aiohttp timeouts (seconds). Short values free workers quickly on a dead proxy.
-request_timeout = 5
+request_timeout = 8
 connect_timeout = 4
 # TCP pool keep-alive (seconds). The tunnel is reused until a 429.
 keepalive_timeout = 30
@@ -72,8 +80,15 @@ dead_after_failures = 8
 dead_cooldown_seconds = 30
 # list: max in-flight requests per IP (1 = one request at a time per session).
 max_inflight_per_ip = 1
-# Retry-After above this threshold (seconds) = IP/CF burned. Rotate, do NOT wait.
-huge_retry_after = 30
+
+[pause]
+# Trip when this many network errors land within window_seconds. 429s do not count.
+# Stays paused until there are no network errors for quiet_seconds (timer resets on each one).
+# A few probe requests keep running so we can tell when the storm is actually over.
+error_limit = 250
+window_seconds = 4
+quiet_seconds = 8
+probes = 8
 
 [cloudflare]
 # 10,000 invalid requests / 10 minutes / IP.
